@@ -49,7 +49,7 @@ async function getDrafts(req: Request, res: Response) {
   }
 }
 
-async function readMail(req: Request, res: Response) {
+export async function readMail(req: Request, res: Response) {
   try {
     const url = `https://gmail.googleapis.com/gmail/v1/users/prasoon2honey@gmail.com/messages/${req.params.messageId}`;
     const { token } = await oAuth2Client.getAccessToken();
