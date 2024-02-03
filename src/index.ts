@@ -1,10 +1,13 @@
 import express, { Request, Response } from "express";
-import { router as routes } from "./routes";
 import "dotenv/config";
 import { google } from "googleapis";
 import bodyParser from "body-parser";
 import { generateConfig } from "./utils";
 import axios from "axios";
+import { type WebSocket, WebSocketServer } from "ws";
+import http from "http";
+import { watchEmails } from "./watchEmail";
+import { EventEmitter } from "stream";
 
 const app = express();
 const port = 8000;
@@ -19,6 +22,17 @@ let latestEmailFrom: any[] = [];
 let latestEmailSubject: any[] = [];
 let latestEmailBody: any[] = [];
 let myApi: any[] = [];
+const eventEmitter = new EventEmitter();
+
+const oAuth2Client = new google.auth.OAuth2(
+  process.env.GOOGLE_CLIENT_ID,
+  process.env.GOOGLE_CLIENT_SECRET,
+  process.env.GOOGLE_REDIRECT_URI
+);
+
+oAuth2Client.setCredentials({
+  refresh_token: process.env.GOOGLE_REFRESH_TOKEN,
+});
 
 app.post("/api", async (req, res) => {
   const url = `https://gmail.googleapis.com/gmail/v1/users/prasoon2honey@gmail.com/messages?q=in:inbox`;
@@ -31,9 +45,23 @@ app.post("/api", async (req, res) => {
   latestEmailId = newEmails?.messages[0].id;
   await readMail(latestEmailId);
 
+  eventEmitter.emit("updatedEmail", {
+    ID: latestEmail,
+    To: latestEmailTo,
+    From: latestEmailFrom,
+    Subject: latestEmailSubject,
+    Body: latestEmailBody,
+  });
   res.status(200).send("OK");
+  // console.log({
+  //   ID: latestEmail,
+  //   To: latestEmailTo,
+  //   From: latestEmailFrom,
+  //   Subject: latestEmailSubject,
+  //   Body: latestEmailBody,
+  // });
 });
-async function readMail(id: any[]) {
+export async function readMail(id: any[]) {
   const url = `https://gmail.googleapis.com/gmail/v1/users/prasoon2honey@gmail.com/messages/${id}`;
   const { token } = await oAuth2Client.getAccessToken();
   const config = generateConfig(url, token as string);
@@ -47,45 +75,46 @@ async function readMail(id: any[]) {
   latestEmailSubject = data?.payload?.headers[19];
 }
 app.get("/emails", async (req: Request, res: Response) => {
-  // myApi.push(latestEmail);
-  // myApi.push(latestEmailId);
-  // myApi.push(latestEmailFullData);
   res.json({
-    latestEmailTo,
-    latestEmailFrom,
-    latestEmailSubject,
-    latestEmailFullData,
+    ID: latestEmail,
+    To: latestEmailTo,
+    From: latestEmailFrom,
+    Subject: latestEmailSubject,
+    Body: latestEmailBody,
+  });
+});
+watchEmails();
+const server = http.createServer(app);
+
+const wsServer = new WebSocketServer({ server: server });
+
+wsServer.on("connection", (connection, request) => {
+  // connection.send(
+  //   JSON.stringify({
+  //     ID: latestEmail,
+  //     To: latestEmailTo,
+  //     From: latestEmailFrom,
+  //     Subject: latestEmailSubject,
+  //     Body: latestEmailBody,
+  //   })
+  // );
+  const updateHandler = (updatedEmail: any) => {
+    connection.send(
+      JSON.stringify({
+        ID: latestEmail,
+        To: latestEmailTo,
+        From: latestEmailFrom,
+        Subject: latestEmailSubject,
+        Body: latestEmailBody,
+      })
+    );
+  };
+  eventEmitter.on("updatedEmail", updateHandler);
+  connection.on("close", () => {
+    eventEmitter.off("updatedEmail", updateHandler);
   });
 });
 
-app.listen(port, () => {
+server.listen(port, () => {
   console.log(`Server is running on port ${port}`);
 });
-
-const oAuth2Client = new google.auth.OAuth2(
-  process.env.GOOGLE_CLIENT_ID,
-  process.env.GOOGLE_CLIENT_SECRET,
-  process.env.GOOGLE_REDIRECT_URI
-);
-oAuth2Client.setCredentials({
-  refresh_token: process.env.GOOGLE_REFRESH_TOKEN,
-});
-const gmail = google.gmail({ version: "v1", auth: oAuth2Client });
-
-const watchParams = {
-  userId: "me",
-  resource: {
-    labelIds: ["INBOX"],
-    topicName: "projects/readydesk-api/topics/pubsubforemail",
-  },
-};
-
-async function watchEmails() {
-  try {
-    const { data } = await gmail.users.watch(watchParams);
-    console.log("Watch response:", data);
-  } catch (error: any) {
-    console.error("Error watching user:", error.message);
-  }
-}
-watchEmails();
